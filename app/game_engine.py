@@ -28,6 +28,8 @@ class ChessGame:
     )
     flag: MutationFlag = field(default_factory=MutationFlag)
     history: list[str] = field(default_factory=list)
+    game_over: bool = False
+    winner: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.board:
@@ -41,22 +43,30 @@ class ChessGame:
             self.board[0][col] = {"color": "black", "type": ptype}
             self.board[1][col] = {"color": "black", "type": "pawn"}
             self.board[6][col] = {"color": "white", "type": "pawn"}
-            self.board[7][col] = {"color": "white", "type": "rook" if ptype == "rook" else ptype}
+            self.board[7][col] = {"color": "white", "type": ptype}
 
         self.turn = "white"
         self.selected_square = None
         self.mutations = {"white": {}, "black": {}}
         self.flag = MutationFlag()
+        self.game_over = False
+        self.winner = None
         self.history = ["New game started. White to move."]
 
     def _in_bounds(self, r: int, c: int) -> bool:
         return 0 <= r < 8 and 0 <= c < 8
 
     def select_piece(self, r: int, c: int) -> dict:
+        if self.game_over:
+            return {
+                "ok": False,
+                "error": f"Game over! {(self.winner or '').capitalize()} won. Click Reset to play again.",
+                "state": self.to_dict(),
+            }
+
         if not self._in_bounds(r, c):
             return {"ok": False, "error": "Square out of bounds."}
 
-        # If a piece is already selected, player is locked to that piece unless they forfeit
         if self.selected_square is not None:
             if self.selected_square == (r, c):
                 return {
@@ -96,6 +106,13 @@ class ChessGame:
         }
 
     def forfeit_turn(self) -> dict:
+        if self.game_over:
+            return {
+                "ok": False,
+                "error": f"Game over! {(self.winner or '').capitalize()} won. Click Reset to play again.",
+                "state": self.to_dict(),
+            }
+
         previous_turn = self.turn
         had_selection = self.selected_square is not None
         self.selected_square = None
@@ -108,7 +125,9 @@ class ChessGame:
         self.history.insert(0, note)
         return {"ok": True, "message": note, "state": self.to_dict()}
 
-    def _ray_moves(self, r: int, c: int, color: str, directions: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    def _ray_moves(
+        self, r: int, c: int, color: str, directions: list[tuple[int, int]]
+    ) -> list[tuple[int, int]]:
         moves: list[tuple[int, int]] = []
         for dr, dc in directions:
             nr, nc = r + dr, c + dc
@@ -124,7 +143,9 @@ class ChessGame:
                 nc += dc
         return moves
 
-    def _step_moves(self, r: int, c: int, color: str, offsets: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    def _step_moves(
+        self, r: int, c: int, color: str, offsets: list[tuple[int, int]]
+    ) -> list[tuple[int, int]]:
         moves: list[tuple[int, int]] = []
         for dr, dc in offsets:
             nr, nc = r + dr, c + dc
@@ -194,6 +215,13 @@ class ChessGame:
         return []
 
     def move_selected(self, to_r: int, to_c: int) -> dict:
+        if self.game_over:
+            return {
+                "ok": False,
+                "error": f"Game over! {(self.winner or '').capitalize()} won. Click Reset to play again.",
+                "state": self.to_dict(),
+            }
+
         if self.selected_square is None:
             return {"ok": False, "error": "Select a piece first."}
 
@@ -209,11 +237,9 @@ class ChessGame:
         moving_piece = self.board[from_r][from_c]
         captured_piece = self.board[to_r][to_c]
 
-        # Execute move
         self.board[to_r][to_c] = moving_piece
         self.board[from_r][from_c] = None
 
-        # Pawn promotion to queen on last rank
         promoted = False
         if moving_piece["type"] == "pawn" and (to_r == 0 or to_r == 7):
             moving_piece["type"] = "queen"
@@ -228,7 +254,22 @@ class ChessGame:
         if promoted:
             move_desc += " [promoted to queen]"
 
-        # Trigger mutation on capture
+        if captured_piece is not None and captured_piece["type"] == "king":
+            self.game_over = True
+            self.winner = moving_piece["color"]
+            self.selected_square = None
+            win_msg = f"GAME OVER: {self.winner.capitalize()} captured the king and wins!"
+            self.history.insert(0, win_msg)
+            self.history.insert(0, move_desc)
+            self.flag = MutationFlag(
+                active=True,
+                color=self.winner,
+                target_piece="king",
+                mimics_piece="captured",
+                message=win_msg,
+            )
+            return {"ok": True, "state": self.to_dict()}
+
         if captured_piece is not None:
             target_piece = random.choice(PIECE_TYPES)
             current_pattern = self.mutations[moving_piece["color"]].get(target_piece, target_piece)
@@ -279,4 +320,6 @@ class ChessGame:
                 "message": self.flag.message,
             },
             "history": self.history[:20],
+            "game_over": self.game_over,
+            "winner": self.winner,
         }

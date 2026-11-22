@@ -231,6 +231,8 @@
     };
 
     let currentState = null;
+    let ws = null;
+    let reconnectTimer = null;
 
     function showError(msg) {
       const box = document.getElementById("errorBox");
@@ -246,7 +248,9 @@
     function renderMutations(mapObj) {
       const entries = Object.entries(mapObj || {});
       if (!entries.length) return "None";
-      return entries.map(([target, mimics]) => `<div><strong>${target}</strong> → moves like <strong>${mimics}</strong></div>`).join("");
+      return entries
+        .map(([target, mimics]) => `<div><strong>${target}</strong> → moves like <strong>${mimics}</strong></div>`)
+        .join("");
     }
 
     function render(state) {
@@ -315,7 +319,7 @@
         if (!data.ok) {
           showError(data.error);
           if (data.state) render(data.state);
-        } else {
+        } else if (data.state) {
           render(data.state);
         }
         return;
@@ -330,7 +334,7 @@
       if (!data.ok) {
         showError(data.error);
         if (data.state) render(data.state);
-      } else {
+      } else if (data.state) {
         render(data.state);
       }
     }
@@ -349,9 +353,46 @@
       if (data.state) render(data.state);
     }
 
+    function connectWebSocket() {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "state" && msg.state) {
+            render(msg.state);
+          }
+        } catch (err) {
+          console.error("Invalid WS message:", err);
+        }
+      };
+
+      ws.onclose = () => {
+        if (!reconnectTimer) {
+          reconnectTimer = setTimeout(connectWebSocket, 1500);
+        }
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+    }
+
     (async () => {
       const res = await fetch("/api/state");
-      render(await res.json());
+      if (res.ok) {
+        render(await res.json());
+      }
+      connectWebSocket();
     })();
   </script>
 </body>

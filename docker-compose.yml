@@ -1,0 +1,6 @@
+services:
+  chaos-chess:
+    build: .
+    container_name: chaos-chess
+    ports:
+      - "8000:8000"
